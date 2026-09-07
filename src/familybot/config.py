@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     transcription_language: str = "de"
 
     default_area: str = "Sonstiges"
+    conversation_db_path: str = "data/conversation.db"
+    conversation_ttl_minutes: int = 20
 
 
 settings = Settings()

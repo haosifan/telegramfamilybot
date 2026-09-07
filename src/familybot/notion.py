@@ -67,6 +67,22 @@ class NotionStore:
         r = await self.client.patch(f"/pages/{task_id}", json={"properties": props})
         r.raise_for_status()
 
+    async def get(self, task_id: str) -> Task | None:
+        r = await self.client.get(f"/pages/{task_id}")
+        if r.status_code == 404:
+            return None
+        r.raise_for_status()
+        page = r.json()
+        if page.get("in_trash", False):
+            return None
+        return self._from_page(page)
+
+    async def delete(self, task_id: str) -> None:
+        # Notion has no permanent page deletion API. Since API version 2026-03-11
+        # `in_trash` is the supported, recoverable replacement for `archived`.
+        r = await self.client.patch(f"/pages/{task_id}", json={"in_trash": True})
+        r.raise_for_status()
+
     async def query(self, filter_obj: dict | None = None, sorts: list | None = None) -> list[Task]:
         payload = {"page_size": 100}
         if filter_obj:

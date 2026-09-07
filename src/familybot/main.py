@@ -14,6 +14,7 @@ from .llm import LLMParser
 from .notion import NotionStore
 from .reviews import Reviews
 from .service import TaskService
+from .state import ConversationStateStore
 from .stt import SpeechToText
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -22,7 +23,8 @@ log = logging.getLogger("familybot")
 tz = ZoneInfo(settings.timezone)
 store = NotionStore(settings.notion_token, settings.notion_data_source_id, settings.notion_version)
 parser = LLMParser(settings.openai_api_key, settings.openai_model, settings.timezone)
-service = TaskService(store, settings.default_area)
+state_store = ConversationStateStore(settings.conversation_db_path, settings.conversation_ttl_minutes)
+service = TaskService(store, settings.default_area, state_store)
 reviews = Reviews(service, settings.timezone)
 stt = SpeechToText(settings.openai_api_key, settings.openai_transcription_model, settings.transcription_language)
 
@@ -72,15 +74,10 @@ async def handle_voice(update: Update, context: CallbackContext):
 
 async def process_input(update: Update, text: str):
     try:
-        plan = await parser.parse(text, datetime.now(tz))
-        if plan.clarification:
-            return await update.message.reply_text(f"❓ {plan.clarification}")
-        if not plan.actions:
-            return await update.message.reply_text("Ich habe darin keine Aufgabenaktion erkannt.")
-        results = []
-        for action in plan.actions:
-            results.append(await service.execute(action))
-        await update.message.reply_text("\n\n".join(results))
+        result = await service.handle_message(
+            update.effective_chat.id, text, parser, datetime.now(tz)
+        )
+        await update.message.reply_text(result)
     except Exception as e:
         log.exception("processing failed")
         await update.message.reply_text(f"⚠️ Verarbeitung fehlgeschlagen: {type(e).__name__}. Details stehen im Server-Log.")

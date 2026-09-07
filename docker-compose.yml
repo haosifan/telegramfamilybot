@@ -4,5 +4,7 @@ services:
     container_name: family-task-bot
     restart: unless-stopped
     env_file: .env
+    volumes:
+      - ./data:/app/data
     # No ports, GPU, model volumes or host integrations required.
     # Telegram is accessed via long polling; OpenAI and Notion via outgoing HTTPS.

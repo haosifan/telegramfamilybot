@@ -2,28 +2,46 @@ from __future__ import annotations
 
 from datetime import datetime
 import json
+
 import httpx
+
 from .models import ActionPlan
 
 SYSTEM = """Du bist der Parser eines persönlichen Aufgabenassistenten.
 Der Benutzer spricht Deutsch und kann mehrere Änderungen in einem Satz nennen.
 
 Erlaubte Aktionen:
-- create: neue Aufgabe
-- update: bestehende Aufgabe ändern
-- complete: bestehende Aufgabe erledigen
-- list: Aufgaben abfragen
+- create_task: neue Aufgabe
+- update_task: Eigenschaften einer bestehenden Aufgabe ändern (Termin, Priorität, Notizen usw.)
+- rename_task: ausschließlich den Titel einer bestehenden Aufgabe ändern
+- complete_task: bestehende Aufgabe als erledigt markieren
+- delete_task: bestehende Aufgabe in den Notion-Papierkorb verschieben
+- list_tasks: Aufgaben abfragen
+- select_task: eine nummerierte Aufgabe aus dem kurzlebigen Dialogkontext auswählen
 - noop: keine Task-Aktion
 
-Regeln:
+Strikte Regeln:
+- Completion, Update und Delete haben Vorrang vor Create. Ein Satz wie "Paperless sortieren. Done."
+  ist complete_task mit task_query="Paperless sortieren", niemals create_task.
+- "löschen" und "entfernen" bedeuten immer delete_task. "erledigt", "done", "abschließen"
+  und "abhaken" bedeuten immer complete_task. Vermische diese Aktionen nie.
+- Für eine reine Titeländerung verwende rename_task: task_query bezeichnet den bisherigen Titel,
+  title enthält den neuen vollständigen Titel.
+- task_query ist bei update_task/rename_task/complete_task/delete_task eine kurze charakteristische Teilzeichenfolge.
+- Referenzen auf die zuletzt betroffene Aufgabe erhalten reference="last_task". Nummerierte Referenzen
+  erhalten select_task und selection_index (1-basiert). Erfinde niemals eine ID; IDs sind kein Ausgabefeld.
+- Nutze den Dialogkontext nur, wenn Eingabe und Kontext plausibel zusammengehören. Frage sonst nach.
 - Erfinde kein Fälligkeitsdatum, wenn keines genannt oder eindeutig impliziert ist.
-- Bei 'morgen', Wochentagen etc. löse auf ein konkretes ISO-Datum auf Basis des mitgegebenen aktuellen Datums auf.
-- 'dringend' als Erinnerung => reminder=Urgent; wenn zugleich Wichtigkeit gemeint ist, priority=High.
-- task_query soll bei update/complete eine kurze charakteristische Teilzeichenfolge des Aufgabentitels sein.
-- Wenn eine Referenz zu unklar ist, setze clarification statt zu raten.
-- Für create ohne Datum: due=null. Der Status Inbox/Open wird außerhalb des Parsers bestimmt.
+- Bei "morgen", Wochentagen etc. löse ein ISO-Datum anhand des aktuellen Datums auf.
+- "dringend" als Erinnerung => reminder=Urgent; wenn zugleich Wichtigkeit gemeint ist, priority=High.
+- Für create_task ohne Datum: due=null. Inbox/Open wird außerhalb des Parsers bestimmt.
 - Gib ausschließlich Daten zurück, die dem vorgegebenen JSON-Schema entsprechen.
 """
+
+ACTION_NAMES = [
+    "create_task", "update_task", "rename_task", "complete_task", "delete_task",
+    "list_tasks", "select_task", "noop",
+]
 
 ACTION_PLAN_SCHEMA = {
     "type": "object",
@@ -35,7 +53,7 @@ ACTION_PLAN_SCHEMA = {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "action": {"type": "string", "enum": ["create", "update", "complete", "list", "noop"]},
+                    "action": {"type": "string", "enum": ACTION_NAMES},
                     "task_query": {"type": ["string", "null"]},
                     "title": {"type": ["string", "null"]},
                     "due": {"type": ["string", "null"]},
@@ -44,11 +62,19 @@ ACTION_PLAN_SCHEMA = {
                     "reminder": {"type": ["string", "null"], "enum": ["None", "Normal", "Urgent", None]},
                     "area": {"type": ["string", "null"]},
                     "notes": {"type": ["string", "null"]},
-                    "list_scope": {"type": ["string", "null"], "enum": ["today", "tomorrow", "open", "overdue", "inbox", None]},
+                    "list_scope": {
+                        "type": ["string", "null"],
+                        "enum": ["today", "tomorrow", "open", "overdue", "inbox", None],
+                    },
+                    "selection_index": {"type": ["integer", "null"], "minimum": 1},
+                    "reference": {
+                        "type": ["string", "null"],
+                        "enum": ["last_task", "presented_task", None],
+                    },
                 },
                 "required": [
                     "action", "task_query", "title", "due", "clear_due", "priority",
-                    "reminder", "area", "notes", "list_scope"
+                    "reminder", "area", "notes", "list_scope", "selection_index", "reference",
                 ],
             },
         },
@@ -59,7 +85,7 @@ ACTION_PLAN_SCHEMA = {
 
 
 class LLMParser:
-    """Task parser using the OpenAI Responses API with Structured Outputs."""
+    """Task parser using the OpenAI Responses API with strict Structured Outputs."""
 
     def __init__(self, api_key: str, model: str, timezone: str):
         self.model = model
@@ -81,8 +107,18 @@ class LLMParser:
                     return content["text"]
         raise ValueError("OpenAI response contained no output_text")
 
-    async def parse(self, text: str, now: datetime) -> ActionPlan:
-        user = f"Aktuelles Datum/Zeit ({self.timezone}): {now.isoformat()}\nBenutzereingabe: {text}"
+    async def parse(
+        self,
+        text: str,
+        now: datetime,
+        conversation_context: dict | None = None,
+    ) -> ActionPlan:
+        user = (
+            f"Aktuelles Datum/Zeit ({self.timezone}): {now.isoformat()}\n"
+            f"Kurzlebiger Dialogkontext (kann fehlen): "
+            f"{json.dumps(conversation_context, ensure_ascii=False)}\n"
+            f"Benutzereingabe: {text}"
+        )
         response = await self.client.post(
             "/responses",
             json={

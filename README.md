@@ -196,6 +196,36 @@ Es gibt bewusst:
 
 ## Bedienlogik
 
+### Kurzlebiger Conversation State
+
+Der Bot speichert pro Telegram-Chat einen kleinen Arbeitskontext in SQLite. Darin stehen nur
+die zuletzt betroffene Notion-Page-ID, die zuletzt angezeigten Tasks sowie gegebenenfalls ein
+noch offener Intent mit nummerierten Kandidaten. Notion bleibt die einzige Task-Datenbank; es
+werden keine Aufgaben lokal gespiegelt.
+
+Der Kontext verfällt standardmäßig nach 20 Minuten. Dadurch funktionieren Folgeangaben wie
+`das erste`, `Nummer 2`, `die letzte Aufgabe` oder `das eben erstellte`, sofern die Referenz im
+aktuellen Dialog eindeutig ist. Korrekturen wie `Der komplette Titel ist ...` beziehen sich nur
+direkt nach Create, Update oder Rename auf dieselbe Notion-Page-ID. Bei abgelaufenem oder
+unklarem Kontext fragt der Bot nach, statt eine alte Aufgabe zu verändern.
+
+Die SQLite-Datei liegt standardmäßig unter `data/conversation.db`. Docker Compose bindet
+`./data` nach `/app/data` ein, sodass der Kontext Container-Neustarts überlebt. Für ein Backup
+des kurzlebigen Kontexts kann dieses Verzeichnis zusammen mit dem Deployment gesichert werden;
+die eigentlichen Aufgaben werden weiterhin in Notion gesichert.
+
+```env
+CONVERSATION_DB_PATH=data/conversation.db
+CONVERSATION_TTL_MINUTES=20
+```
+
+### Erledigen und Löschen
+
+`erledigt`, `done`, `abschließen` und `abhaken` setzen den Notion-Status auf `Done`.
+`löschen` und `entfernen` sind davon strikt getrennt und verschieben die Notion-Page mit
+`in_trash=true` in den wiederherstellbaren Papierkorb. Notion unterstützt über die API keine
+unwiderrufliche Löschung von Pages.
+
 ### Neue Aufgabe
 
 ```text
@@ -286,7 +316,6 @@ Damit ist diese Variante wesentlich ressourcenschonender als eine lokale Modellp
 Noch nicht enthalten:
 
 - Inline-Buttons zum Abhaken/Verschieben.
-- Kontextdialog über mehrere Telegram-Nachrichten hinweg (`"das zweite"`).
 - Wiederkehrende Aufgaben.
 - Wochenreview.
 - Persistentes Audit-Log aller Bot-Aktionen.
