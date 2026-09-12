@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 Priority = Literal["Low", "Normal", "High"]
 Reminder = Literal["None", "Normal", "Urgent"]
 Status = Literal["Inbox", "Open", "Done"]
+ClearableField = Literal["due", "reminder", "notes"]
 ActionName = Literal[
     "create_task",
     "update_task",
@@ -44,6 +45,8 @@ class Action(BaseModel):
     task_query: str | None = None
     title: str | None = None
     due: date | None = None
+    clear_fields: list[ClearableField] = Field(default_factory=list)
+    # Backward compatibility for pending intents written by older versions.
     clear_due: bool = False
     priority: Priority | None = None
     reminder: Reminder | None = None

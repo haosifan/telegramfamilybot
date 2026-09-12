@@ -21,10 +21,18 @@ Erlaubte Aktionen:
 - noop: keine Task-Aktion
 
 Strikte Regeln:
-- Completion, Update und Delete haben Vorrang vor Create. Ein Satz wie "Paperless sortieren. Done."
+- Completion und Änderungen bestehender Tasks haben Vorrang vor Create. Ein Satz wie "Paperless sortieren. Done."
   ist complete_task mit task_query="Paperless sortieren", niemals create_task.
-- "löschen" und "entfernen" bedeuten immer delete_task. "erledigt", "done", "abschließen"
-  und "abhaken" bedeuten immer complete_task. Vermische diese Aktionen nie.
+- Entscheide, worauf sich "löschen" oder "entfernen" bezieht: "Task/Aufgabe löschen" ist delete_task.
+  "Deadline/Termin/Fälligkeitsdatum löschen", "ohne Termin" und "kein Termin" sind update_task
+  mit clear_fields=["due"]. Suche dabei niemals eine Aufgabe namens "Deadline" oder "Termin".
+- "Reminder/Erinnerung löschen" und "nicht mehr dringend" sind update_task mit
+  clear_fields=["reminder"]. Ein null-Wert bedeutet bei Update immer "Feld nicht ändern";
+  nur clear_fields entfernt einen vorhandenen Wert.
+- Wenn eine Eingabe einen Task bezeichnet und zusätzlich Termin, Priorität, Reminder oder Notizen
+  verändert, verwende update_task statt create_task. Beispiele: "Telefon besorgen, morgen",
+  "Telefon besorgen, 18.09.", "Telefon besorgen, Priorität hoch".
+- "erledigt", "done", "abschließen" und "abhaken" bedeuten complete_task.
 - Für eine reine Titeländerung verwende rename_task: task_query bezeichnet den bisherigen Titel,
   title enthält den neuen vollständigen Titel.
 - task_query ist bei update_task/rename_task/complete_task/delete_task eine kurze charakteristische Teilzeichenfolge.
@@ -35,6 +43,8 @@ Strikte Regeln:
 - Bei "morgen", Wochentagen etc. löse ein ISO-Datum anhand des aktuellen Datums auf.
 - "dringend" als Erinnerung => reminder=Urgent; wenn zugleich Wichtigkeit gemeint ist, priority=High.
 - Für create_task ohne Datum: due=null. Inbox/Open wird außerhalb des Parsers bestimmt.
+- clear_fields darf nur bei update_task befüllt werden und enthält ausschließlich wirklich zu
+  entfernende Felder. Ansonsten ist es eine leere Liste.
 - Gib ausschließlich Daten zurück, die dem vorgegebenen JSON-Schema entsprechen.
 """
 
@@ -57,7 +67,10 @@ ACTION_PLAN_SCHEMA = {
                     "task_query": {"type": ["string", "null"]},
                     "title": {"type": ["string", "null"]},
                     "due": {"type": ["string", "null"]},
-                    "clear_due": {"type": "boolean"},
+                    "clear_fields": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": ["due", "reminder", "notes"]},
+                    },
                     "priority": {"type": ["string", "null"], "enum": ["Low", "Normal", "High", None]},
                     "reminder": {"type": ["string", "null"], "enum": ["None", "Normal", "Urgent", None]},
                     "area": {"type": ["string", "null"]},
@@ -73,7 +86,7 @@ ACTION_PLAN_SCHEMA = {
                     },
                 },
                 "required": [
-                    "action", "task_query", "title", "due", "clear_due", "priority",
+                    "action", "task_query", "title", "due", "clear_fields", "priority",
                     "reminder", "area", "notes", "list_scope", "selection_index", "reference",
                 ],
             },
